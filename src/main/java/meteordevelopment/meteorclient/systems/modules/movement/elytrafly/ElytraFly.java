@@ -343,7 +343,7 @@ public class ElytraFly extends Module {
     public void onActivate() {
         currentMode.onActivate();
         if ((chestSwap.get() == ChestSwapMode.Always || chestSwap.get() == ChestSwapMode.WaitForGround)
-            && mc.player.getEquippedStack(EquipmentSlot.CHEST).getItem() != Items.ELYTRA) {
+            && mc.player.getEquippedStack(EquipmentSlot.CHEST).getItem() != Items.ELYTRA && isActive()) {
             Modules.get().get(ChestSwap.class).swap();
         }
     }
@@ -400,6 +400,7 @@ public class ElytraFly extends Module {
                 if (mc.world.getChunkManager().isChunkLoaded(chunkX, chunkZ)) {
                     if (flightMode.get() != ElytraFlightModes.Bounce) ((IVec3d) event.movement).set(currentMode.velX, currentMode.velY, currentMode.velZ);
                 } else {
+                    currentMode.zeroAcceleration();
                     ((IVec3d) event.movement).set(0, currentMode.velY, 0);
                 }
             } else if (flightMode.get() != ElytraFlightModes.Bounce) ((IVec3d) event.movement).set(currentMode.velX, currentMode.velY, currentMode.velZ);

@@ -21,27 +21,23 @@ import meteordevelopment.meteorclient.utils.player.EChestMemory;
 import meteordevelopment.meteorclient.utils.render.color.Color;
 import meteordevelopment.meteorclient.utils.tooltip.*;
 import meteordevelopment.orbit.EventHandler;
-import net.minecraft.component.ComponentMap;
+import net.minecraft.block.entity.BeehiveBlockEntity;
 import net.minecraft.component.DataComponentTypes;
 import net.minecraft.component.type.*;
-import net.minecraft.component.type.BannerPatternsComponent.Layer;
 import net.minecraft.component.type.SuspiciousStewEffectsComponent.StewEffect;
 import net.minecraft.entity.Bucketable;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.effect.StatusEffectInstance;
 import net.minecraft.entity.effect.StatusEffectUtil;
-import net.minecraft.inventory.Inventories;
 import net.minecraft.item.*;
-import net.minecraft.nbt.NbtList;
-import net.minecraft.registry.DynamicRegistryManager;
+import net.minecraft.registry.RegistryKeys;
 import net.minecraft.text.MutableText;
 import net.minecraft.text.RawFilteredPair;
 import net.minecraft.text.Text;
+import net.minecraft.util.DyeColor;
 import net.minecraft.util.Formatting;
-import net.minecraft.util.collection.DefaultedList;
 
-import java.io.IOException;
 import java.util.Comparator;
 import java.util.List;
 
@@ -60,6 +56,7 @@ public class BetterTooltips extends Module {
         .name("display-when")
         .description("When to display previews.")
         .defaultValue(DisplayWhen.Keybind)
+        .onChanged(value -> updateTooltips = true)
         .build()
     );
 
@@ -68,6 +65,7 @@ public class BetterTooltips extends Module {
         .description("The bind for keybind mode.")
         .defaultValue(Keybind.fromKey(GLFW_KEY_LEFT_ALT))
         .visible(() -> displayWhen.get() == DisplayWhen.Keybind)
+        .onChanged(value -> updateTooltips = true)
         .build()
     );
 
@@ -78,12 +76,21 @@ public class BetterTooltips extends Module {
         .build()
     );
 
+    private final Setting<Boolean> pauseInCreative = sgGeneral.add(new BoolSetting.Builder()
+        .name("pause-in-creative")
+        .description("Pauses middle click open while the player is in creative mode.")
+        .defaultValue(true)
+        .visible(middleClickOpen::get)
+        .build()
+    );
+
     // Previews
 
     private final Setting<Boolean> shulkers = sgPreviews.add(new BoolSetting.Builder()
         .name("containers")
         .description("Shows a preview of a containers when hovering over it in an inventory.")
         .defaultValue(true)
+        .onChanged(value -> updateTooltips = true)
         .build()
     );
 
@@ -91,7 +98,6 @@ public class BetterTooltips extends Module {
         .name("compact-shulker-tooltip")
         .description("Compacts the lines of the shulker tooltip.")
         .defaultValue(true)
-        .visible(shulkers::get)
         .build()
     );
 
@@ -99,6 +105,7 @@ public class BetterTooltips extends Module {
         .name("echests")
         .description("Shows a preview of your echest when hovering over it in an inventory.")
         .defaultValue(true)
+        .onChanged(value -> updateTooltips = true)
         .build()
     );
 
@@ -106,6 +113,7 @@ public class BetterTooltips extends Module {
         .name("maps")
         .description("Shows a preview of a map when hovering over it in an inventory.")
         .defaultValue(true)
+        .onChanged(value -> updateTooltips = true)
         .build()
     );
 
@@ -123,6 +131,7 @@ public class BetterTooltips extends Module {
         .name("books")
         .description("Shows contents of a book when hovering over it in an inventory.")
         .defaultValue(true)
+        .onChanged(value -> updateTooltips = true)
         .build()
     );
 
@@ -130,6 +139,7 @@ public class BetterTooltips extends Module {
         .name("banners")
         .description("Shows banners' patterns when hovering over it in an inventory. Also works with shields.")
         .defaultValue(true)
+        .onChanged(value -> updateTooltips = true)
         .build()
     );
 
@@ -137,6 +147,7 @@ public class BetterTooltips extends Module {
         .name("entities-in-buckets")
         .description("Shows entities in buckets when hovering over it in an inventory.")
         .defaultValue(true)
+        .onChanged(value -> updateTooltips = true)
         .build()
     );
 
@@ -146,6 +157,7 @@ public class BetterTooltips extends Module {
         .name("byte-size")
         .description("Displays an item's size in bytes in the tooltip.")
         .defaultValue(true)
+        .onChanged(value -> updateTooltips = true)
         .build()
     );
 
@@ -153,6 +165,7 @@ public class BetterTooltips extends Module {
         .name("status-effects")
         .description("Adds list of status effects to tooltips of food items.")
         .defaultValue(true)
+        .onChanged(value -> updateTooltips = true)
         .build()
     );
 
@@ -160,6 +173,7 @@ public class BetterTooltips extends Module {
         .name("beehive")
         .description("Displays information about a beehive or bee nest.")
         .defaultValue(true)
+        .onChanged(value -> updateTooltips = true)
         .build()
     );
 
@@ -228,44 +242,52 @@ public class BetterTooltips extends Module {
         .build()
     );
 
+    private boolean updateTooltips = false;
+    private static final ItemStack[] ITEMS = new ItemStack[27];
+
     public BetterTooltips() {
         super(Categories.Render, "better-tooltips", "Displays more useful tooltips for certain items.");
     }
 
     @EventHandler
     private void appendTooltip(ItemStackTooltipEvent event) {
+        // Hide hidden (empty) tooltips unless the tooltip hide flag setting is true.
+        if (!tooltip.get() && event.list().isEmpty()) {
+            // Hold-to-preview tooltip text is always added when needed.
+            appendPreviewTooltipText(event, false);
+            return;
+        }
+
         // Status effects
         if (statusEffects.get()) {
-            if (event.itemStack.getItem() == Items.SUSPICIOUS_STEW) {
-                SuspiciousStewEffectsComponent stewEffectsComponent = event.itemStack.get(DataComponentTypes.SUSPICIOUS_STEW_EFFECTS);
+            if (event.itemStack().getItem() == Items.SUSPICIOUS_STEW) {
+                SuspiciousStewEffectsComponent stewEffectsComponent = event.itemStack().get(DataComponentTypes.SUSPICIOUS_STEW_EFFECTS);
                 if (stewEffectsComponent != null) {
                     for (StewEffect effectTag : stewEffectsComponent.effects()) {
                         StatusEffectInstance effect = new StatusEffectInstance(effectTag.effect(), effectTag.duration(), 0);
-                        event.list.add(1, getStatusText(effect));
+                        event.appendStart(getStatusText(effect));
                     }
                 }
             } else {
-                FoodComponent food = event.itemStack.get(DataComponentTypes.FOOD);
+                FoodComponent food = event.itemStack().get(DataComponentTypes.FOOD);
                 if (food != null) {
-                    food.effects().forEach(e -> event.list.add(1, getStatusText(e.effect())));
+                    food.effects().forEach(e -> event.appendStart(getStatusText(e.effect())));
                 }
             }
         }
 
         //Beehive
         if (beehive.get()) {
-            if (event.itemStack.getItem() == Items.BEEHIVE || event.itemStack.getItem() == Items.BEE_NEST) {
-                ComponentMap components = event.itemStack.getComponents();
-                BlockStateComponent blockStateComponent = components.get(DataComponentTypes.BLOCK_STATE);
+            if (event.itemStack().getItem() == Items.BEEHIVE || event.itemStack().getItem() == Items.BEE_NEST) {
+                BlockStateComponent blockStateComponent = event.itemStack().get(DataComponentTypes.BLOCK_STATE);
                 if (blockStateComponent != null) {
                     String level = blockStateComponent.properties().get("honey_level");
-                    event.list.add(1, Text.literal(String.format("%sHoney level: %s%s%s.", Formatting.GRAY, Formatting.YELLOW, level, Formatting.GRAY)));
+                    event.appendStart(Text.literal(String.format("%sHoney level: %s%s%s.", Formatting.GRAY, Formatting.YELLOW, level, Formatting.GRAY)));
                 }
 
-                NbtComponent nbtComponent = components.get(DataComponentTypes.BLOCK_ENTITY_DATA);
-                if (nbtComponent != null) {
-                    NbtList beesTag = nbtComponent.copyNbt().getList("Bees", 10);
-                    event.list.add(1, Text.literal(String.format("%sBees: %s%d%s.", Formatting.GRAY, Formatting.YELLOW, beesTag.size(), Formatting.GRAY)));
+                List<BeehiveBlockEntity.BeeData> bees = event.itemStack().get(DataComponentTypes.BEES);
+                if (bees != null) {
+                    event.appendStart(Text.literal(String.format("%sBees: %s%d%s.", Formatting.GRAY, Formatting.YELLOW, bees.size(), Formatting.GRAY)));
                 }
             }
         }
@@ -273,7 +295,7 @@ public class BetterTooltips extends Module {
         // Item size tooltip
         if (byteSize.get()) {
             try {
-                event.itemStack.encode(mc.player.getRegistryManager()).write(ByteCountDataOutput.INSTANCE);
+                event.itemStack().encode(mc.player.getRegistryManager()).write(ByteCountDataOutput.INSTANCE);
 
                 int byteCount = ByteCountDataOutput.INSTANCE.getCount();
                 String count;
@@ -283,34 +305,22 @@ public class BetterTooltips extends Module {
                 if (byteCount >= 1024) count = String.format("%.2f kb", byteCount / (float) 1024);
                 else count = String.format("%d bytes", byteCount);
 
-                event.list.add(Text.literal(count).formatted(Formatting.GRAY));
-            } catch (IOException e) {
-                e.printStackTrace();
+                event.appendEnd(Text.literal(count).formatted(Formatting.GRAY));
+            } catch (Exception e) {
+                event.appendEnd(Text.literal("Error getting bytes.").formatted(Formatting.RED));
             }
         }
 
         // Hold to preview tooltip
-        if ((shulkers.get() && !previewShulkers() && Utils.hasItems(event.itemStack))
-            || (event.itemStack.getItem() == Items.ENDER_CHEST && echest.get() && !previewEChest())
-            || (event.itemStack.getItem() == Items.FILLED_MAP && maps.get() && !previewMaps())
-            || (event.itemStack.getItem() == Items.WRITABLE_BOOK && books.get() && !previewBooks())
-            || (event.itemStack.getItem() == Items.WRITTEN_BOOK && books.get() && !previewBooks())
-            || (event.itemStack.getItem() instanceof EntityBucketItem && entitiesInBuckets.get() && !previewEntities())
-            || (event.itemStack.getItem() instanceof BannerItem && banners.get() && !previewBanners())
-            || (event.itemStack.getItem() instanceof BannerPatternItem && banners.get() && !previewBanners())
-            || (event.itemStack.getItem() == Items.SHIELD && banners.get() && !previewBanners())) {
-            event.list.add(Text.literal(""));
-            event.list.add(Text.literal("Hold " + Formatting.YELLOW + keybind + Formatting.RESET + " to preview"));
-        }
+        appendPreviewTooltipText(event, true);
     }
 
     @EventHandler
     private void getTooltipData(TooltipDataEvent event) {
         // Container preview
         if (previewShulkers() && Utils.hasItems(event.itemStack)) {
-            ItemStack[] itemStacks = new ItemStack[27];
-            Utils.getItemsInContainerItem(event.itemStack, itemStacks);
-            event.tooltipData = new ContainerTooltipComponent(itemStacks, Utils.getShulkerColor(event.itemStack));
+            Utils.getItemsInContainerItem(event.itemStack, ITEMS);
+            event.tooltipData = new ContainerTooltipComponent(ITEMS, Utils.getShulkerColor(event.itemStack));
         }
 
         // EChest preview
@@ -335,14 +345,12 @@ public class BetterTooltips extends Module {
         // Banner preview
         else if (event.itemStack.getItem() instanceof BannerItem && previewBanners()) {
             event.tooltipData = new BannerTooltipComponent(event.itemStack);
-        } else if (event.itemStack.getItem() instanceof BannerPatternItem && previewBanners()) {
-            BannerPatternsComponent bannerPatternsComponent = event.itemStack.get(DataComponentTypes.BANNER_PATTERNS);
-            if (bannerPatternsComponent != null) {
-                event.tooltipData = new BannerTooltipComponent(createBannerFromLayers(bannerPatternsComponent.layers()));
-            }
+        } else if (event.itemStack.getItem() instanceof BannerPatternItem bannerPatternItem && previewBanners()) {
+            event.tooltipData = new BannerTooltipComponent(DyeColor.GRAY, createBannerPatternsComponent(bannerPatternItem));
         } else if (event.itemStack.getItem() == Items.SHIELD && previewBanners()) {
-            ItemStack banner = createBannerFromShield(event.itemStack);
-            if (banner != null) event.tooltipData = new BannerTooltipComponent(banner);
+            if (event.itemStack.get(DataComponentTypes.BASE_COLOR) != null || !event.itemStack.getOrDefault(DataComponentTypes.BANNER_PATTERNS, BannerPatternsComponent.DEFAULT).layers().isEmpty()) {
+                event.tooltipData = createBannerFromShield(event.itemStack);
+            }
         }
 
         // Fish peek
@@ -358,36 +366,49 @@ public class BetterTooltips extends Module {
     }
 
     public void applyCompactShulkerTooltip(ItemStack shulkerItem, List<Text> tooltip) {
-        NbtComponent nbtComponent = shulkerItem.get(DataComponentTypes.BLOCK_ENTITY_DATA);
+        if (shulkerItem.contains(DataComponentTypes.CONTAINER_LOOT)) {
+            tooltip.add(Text.literal("???????"));
+        }
 
-        if (nbtComponent != null) {
-            if (nbtComponent.contains("LootTable")) {
-                tooltip.add(Text.literal("???????"));
+        if (Utils.hasItems(shulkerItem)) {
+            Utils.getItemsInContainerItem(shulkerItem, ITEMS);
+
+            Object2IntMap<Item> counts = new Object2IntOpenHashMap<>();
+
+            for (ItemStack item : ITEMS) {
+                if (item.isEmpty()) continue;
+
+                int count = counts.getInt(item.getItem());
+                counts.put(item.getItem(), count + item.getCount());
             }
 
-            if (nbtComponent.contains("Items")) {
-                DefaultedList<ItemStack> items = DefaultedList.ofSize(27, ItemStack.EMPTY);
-                Inventories.readNbt(nbtComponent.copyNbt(), items, DynamicRegistryManager.EMPTY);
+            counts.keySet().stream().sorted(Comparator.comparingInt(value -> -counts.getInt(value))).limit(5).forEach(item -> {
+                MutableText mutableText = item.getName().copyContentOnly();
+                mutableText.append(Text.literal(" x").append(String.valueOf(counts.getInt(item))).formatted(Formatting.GRAY));
+                tooltip.add(mutableText);
+            });
 
-                Object2IntMap<Item> counts = new Object2IntOpenHashMap<>();
-
-                for (ItemStack item : items) {
-                    if (item.isEmpty()) continue;
-
-                    int count = counts.getInt(item.getItem());
-                    counts.put(item.getItem(), count + item.getCount());
-                }
-
-                counts.keySet().stream().sorted(Comparator.comparingInt(value -> -counts.getInt(value))).limit(5).forEach(item -> {
-                    MutableText mutableText = item.getName().copyContentOnly();
-                    mutableText.append(Text.literal(" x").append(String.valueOf(counts.getInt(item))).formatted(Formatting.GRAY));
-                    tooltip.add(mutableText);
-                });
-
-                if (counts.size() > 5) {
-                    tooltip.add((Text.translatable("container.shulkerBox.more", counts.size() - 5)).formatted(Formatting.ITALIC));
-                }
+            if (counts.size() > 5) {
+                tooltip.add((Text.translatable("container.shulkerBox.more", counts.size() - 5)).formatted(Formatting.ITALIC));
             }
+        }
+    }
+
+    private void appendPreviewTooltipText(ItemStackTooltipEvent event, boolean spacer) {
+        if (!isPressed() && (
+            shulkers.get() && Utils.hasItems(event.itemStack())
+            || (event.itemStack().getItem() == Items.ENDER_CHEST && echest.get())
+            || (event.itemStack().getItem() == Items.FILLED_MAP && maps.get())
+            || (event.itemStack().getItem() == Items.WRITABLE_BOOK && books.get())
+            || (event.itemStack().getItem() == Items.WRITTEN_BOOK && books.get())
+            || (event.itemStack().getItem() instanceof EntityBucketItem && entitiesInBuckets.get())
+            || (event.itemStack().getItem() instanceof BannerItem && banners.get())
+            || (event.itemStack().getItem() instanceof BannerPatternItem && banners.get())
+            || (event.itemStack().getItem() == Items.SHIELD && banners.get())
+        )) {
+            // we don't want to add the spacer if the tooltip is hidden
+            if (spacer) event.appendEnd(Text.literal(""));
+            event.appendEnd(Text.literal("Hold " + Formatting.YELLOW + keybind + Formatting.RESET + " to preview"));
         }
     }
 
@@ -420,29 +441,20 @@ public class BetterTooltips extends Module {
         return null;
     }
 
-    private ItemStack createBannerFromLayers(List<Layer> pattern) {
-        ItemStack bannerItem = new ItemStack(Items.GRAY_BANNER);
-        BannerPatternsComponent bannerPatterns = bannerItem.get(DataComponentTypes.BANNER_PATTERNS);
-        bannerPatterns.layers().addAll(pattern);
-        bannerItem.set(DataComponentTypes.BANNER_PATTERNS, bannerPatterns);
-        return bannerItem;
+    private BannerPatternsComponent createBannerPatternsComponent(BannerPatternItem item) {
+        // I can't imagine getting the banner pattern from a banner pattern item would fail without some serious messing around
+        return new BannerPatternsComponent.Builder().add(mc.player.getRegistryManager().getWrapperOrThrow(RegistryKeys.BANNER_PATTERN).getOrThrow(item.getPattern()).get(0), DyeColor.WHITE).build();
     }
 
-    private ItemStack createBannerFromShield(ItemStack shieldItem) {
-        if (!shieldItem.getComponents().isEmpty()
-            || shieldItem.get(DataComponentTypes.BLOCK_ENTITY_DATA) == null
-            || shieldItem.get(DataComponentTypes.BASE_COLOR) == null)
-            return null;
-        ItemStack bannerItem = new ItemStack(Items.GRAY_BANNER);
-        BannerPatternsComponent bannerPatternsComponent = bannerItem.get(DataComponentTypes.BANNER_PATTERNS);
-        BannerPatternsComponent shieldPatternsComponent = shieldItem.get(DataComponentTypes.BANNER_PATTERNS);
-        if (shieldPatternsComponent == null) return bannerItem;
-        bannerPatternsComponent.layers().addAll(shieldPatternsComponent.layers());
-        return bannerItem;
+    private BannerTooltipComponent createBannerFromShield(ItemStack shieldItem) {
+        DyeColor dyeColor2 = shieldItem.getOrDefault(DataComponentTypes.BASE_COLOR, DyeColor.WHITE);
+        BannerPatternsComponent bannerPatternsComponent = shieldItem.getOrDefault(DataComponentTypes.BANNER_PATTERNS, BannerPatternsComponent.DEFAULT);
+        return new BannerTooltipComponent(dyeColor2, bannerPatternsComponent);
     }
 
     public boolean middleClickOpen() {
-        return isActive() && middleClickOpen.get();
+        return (isActive() && middleClickOpen.get())
+            && (!pauseInCreative.get() || !mc.player.isInCreativeMode());
     }
 
     public boolean previewShulkers() {
@@ -475,6 +487,15 @@ public class BetterTooltips extends Module {
 
     private boolean isPressed() {
         return (keybind.get().isPressed() && displayWhen.get() == DisplayWhen.Keybind) || displayWhen.get() == DisplayWhen.Always;
+    }
+
+    public boolean updateTooltips() {
+        if (updateTooltips && isActive()) {
+            updateTooltips = false;
+            return true;
+        }
+
+        return false;
     }
 
     public enum DisplayWhen {

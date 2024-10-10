@@ -5,6 +5,9 @@
 
 package meteordevelopment.meteorclient.systems.modules.render;
 
+import it.unimi.dsi.fastutil.objects.Object2IntMap;
+import it.unimi.dsi.fastutil.objects.Object2IntMaps;
+import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import meteordevelopment.meteorclient.events.render.Render2DEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.renderer.Renderer2D;
@@ -32,8 +35,11 @@ import net.minecraft.enchantment.Enchantments;
 import net.minecraft.entity.*;
 import net.minecraft.entity.decoration.ItemFrameEntity;
 import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.entity.vehicle.TntMinecartEntity;
 import net.minecraft.item.ItemStack;
+import net.minecraft.registry.RegistryKey;
 import net.minecraft.registry.entry.RegistryEntry;
+import net.minecraft.registry.tag.EnchantmentTags;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.GameMode;
@@ -182,7 +188,7 @@ public class Nametags extends Module {
         .build()
     );
 
-    private final Setting<List<Enchantment>> shownEnchantments = sgPlayers.add(new EnchantmentListSetting.Builder()
+    private final Setting<Set<RegistryKey<Enchantment>>> shownEnchantments = sgPlayers.add(new EnchantmentListSetting.Builder()
         .name("shown-enchantments")
         .description("The enchantments that are shown on nametags.")
         .visible(() -> displayItems.get() && displayEnchants.get())
@@ -292,7 +298,7 @@ public class Nametags extends Module {
     private final List<Entity> entityList = new ArrayList<>();
 
     public Nametags() {
-        super(Categories.Render, "nametags", "Displays customizable nametags above players.");
+        super(Categories.Render, "nametags", "Displays customizable nametags above players, items and other entities.");
     }
 
     private static String ticksToTime(int ticks) {
@@ -353,8 +359,11 @@ public class Nametags extends Module {
                 else if (type == EntityType.ITEM) renderNametagItem(((ItemEntity) entity).getStack(), shadow);
                 else if (type == EntityType.ITEM_FRAME)
                     renderNametagItem(((ItemFrameEntity) entity).getHeldItemStack(), shadow);
-                else if (type == EntityType.TNT) renderTntNametag((TntEntity) entity, shadow);
-                else if (entity instanceof LivingEntity) renderGenericNametag((LivingEntity) entity, shadow);
+                else if (type == EntityType.TNT) renderTntNametag(ticksToTime(((TntEntity) entity).getFuse()), shadow);
+                else if (type == EntityType.TNT_MINECART && ((TntMinecartEntity) entity).isPrimed())
+                    renderTntNametag(ticksToTime(((TntMinecartEntity) entity).getFuseTicks()), shadow);
+                else if (entity instanceof LivingEntity) renderGenericLivingNametag((LivingEntity) entity, shadow);
+                else renderGenericNametag(entity, shadow);
             }
         }
     }
@@ -485,8 +494,8 @@ public class Nametags extends Module {
 
                     int size = 0;
                     for (RegistryEntry<Enchantment> enchantment : enchantments.getEnchantments()) {
-                        if (!shownEnchantments.get().contains(enchantment.value())) continue;
-                        String enchantName = Utils.getEnchantSimpleName(enchantment.value(), enchantLength.get()) + " " + enchantments.getLevel(enchantment.value());
+                        if (enchantment.getKey().isPresent() && !shownEnchantments.get().contains(enchantment.getKey().get())) continue;
+                        String enchantName = Utils.getEnchantSimpleName(enchantment, enchantLength.get()) + " " + enchantments.getLevel(enchantment);
                         itemWidths[i] = Math.max(itemWidths[i], (text.getWidth(enchantName, shadow) / 2));
                         size++;
                     }
@@ -527,11 +536,11 @@ public class Nametags extends Module {
                     text.begin(0.5 * enchantTextScale.get(), false, true);
 
                     ItemEnchantmentsComponent enchantments = EnchantmentHelper.getEnchantments(stack);
-                    Map<Enchantment, Integer> enchantmentsToShow = new HashMap<>();
+                    Object2IntMap<RegistryEntry<Enchantment>> enchantmentsToShow = new Object2IntOpenHashMap<>();
 
                     for (RegistryEntry<Enchantment> enchantment : enchantments.getEnchantments()) {
-                        if (shownEnchantments.get().contains(enchantment.value())) {
-                            enchantmentsToShow.put(enchantment.value(), enchantments.getLevel(enchantment.value()));
+                        if (enchantment.matches(shownEnchantments.get()::contains)) {
+                            enchantmentsToShow.put(enchantment, enchantments.getLevel(enchantment));
                         }
                     }
 
@@ -545,11 +554,11 @@ public class Nametags extends Module {
 
                     double enchantX;
 
-                    for (Enchantment enchantment : enchantmentsToShow.keySet()) {
-                        String enchantName = Utils.getEnchantSimpleName(enchantment, enchantLength.get()) + " " + enchantmentsToShow.get(enchantment);
+                    for (Object2IntMap.Entry<RegistryEntry<Enchantment>> entry : Object2IntMaps.fastIterable(enchantmentsToShow)) {
+                        String enchantName = Utils.getEnchantSimpleName(entry.getKey(), enchantLength.get()) + " " + entry.getIntValue();
 
                         Color enchantColor = WHITE;
-                        if (enchantment.isCursed()) enchantColor = RED;
+                        if (entry.getKey().isIn(EnchantmentTags.CURSE)) enchantColor = RED;
 
                         enchantX = switch (enchantPos.get()) {
                             case Above -> x + (aW / 2) - (text.getWidth(enchantName, shadow) / 2);
@@ -572,6 +581,8 @@ public class Nametags extends Module {
     }
 
     private void renderNametagItem(ItemStack stack, boolean shadow) {
+        if (stack.isEmpty()) return;
+
         TextRenderer text = TextRenderer.get();
         NametagUtils.begin(pos);
 
@@ -599,7 +610,7 @@ public class Nametags extends Module {
         NametagUtils.end();
     }
 
-    private void renderGenericNametag(LivingEntity entity, boolean shadow) {
+    private void renderGenericLivingNametag(LivingEntity entity, boolean shadow) {
         TextRenderer text = TextRenderer.get();
         NametagUtils.begin(pos);
 
@@ -639,11 +650,32 @@ public class Nametags extends Module {
         NametagUtils.end();
     }
 
-    private void renderTntNametag(TntEntity entity, boolean shadow) {
+    private void renderGenericNametag(Entity entity, boolean shadow) {
         TextRenderer text = TextRenderer.get();
         NametagUtils.begin(pos);
 
-        String fuseText = ticksToTime(entity.getFuse());
+        //Name
+        String nameText = entity.getType().getName().getString();
+
+        double nameWidth = text.getWidth(nameText, shadow);
+        double heightDown = text.getHeight(shadow);
+        double widthHalf = nameWidth / 2;
+
+        drawBg(-widthHalf, -heightDown, nameWidth, heightDown);
+
+        text.beginBig();
+        double hX = -widthHalf;
+        double hY = -heightDown;
+
+        text.render(nameText, hX, hY, nameColor.get(), shadow);
+        text.end();
+
+        NametagUtils.end();
+    }
+
+    private void renderTntNametag(String fuseText, boolean shadow) {
+        TextRenderer text = TextRenderer.get();
+        NametagUtils.begin(pos);
 
         double width = text.getWidth(fuseText, shadow);
         double heightDown = text.getHeight(shadow);
