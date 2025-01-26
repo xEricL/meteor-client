@@ -31,6 +31,7 @@ import java.util.List;
 import java.util.function.BiPredicate;
 
 public class AutoEat extends Module {
+    @SuppressWarnings("unchecked")
     private static final Class<? extends Module>[] AURAS = new Class[]{KillAura.class, CrystalAura.class, AnchorAura.class, BedAura.class};
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
@@ -38,7 +39,7 @@ public class AutoEat extends Module {
 
     // General
 
-    private final Setting<List<Item>> blacklist = sgGeneral.add(new ItemListSetting.Builder()
+    public final Setting<List<Item>> blacklist = sgGeneral.add(new ItemListSetting.Builder()
         .name("blacklist")
         .description("Which items to not eat.")
         .defaultValue(
